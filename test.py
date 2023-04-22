@@ -406,82 +406,628 @@ class b2_objdata:
   def deserialize(self, bf: BinaryFile):
     assert(bf.readInt32() == b2_datafile.c_magic)
     self._id = bf.readInt32()
-    self._name = bf.readString()
-    self._fps = bf.readFloat()
-    self._final = bf.readInt32()
-    alen = bf.readInt32()
-    assert(bf.readInt32() == b2_datafile.c_magic)
-    for i in range(0, alen):
-      a = b2_actiondata()
-      a.deserialize(bf)
-      self._actions.append(a)
-class b2_actiondata:
-  def __init__(self):
-    self._id = -1
-    self._name = ""
-    self._path = ""
-    self._frames = []
-  def serialize(self, bf: BinaryFile):
-    bf.writeInt32(b2_datafile.c_magic)
-    bf.writeInt32(self._id)
-    bf.writeString(self._name)
-    bf.writeString(self._path)
-    bf.writeInt32(len(self._frames))
-    bf.writeInt32(b2_datafile.c_magic)
-    for i in range(0, len(self._frames)):
-      self._frames[i].serialize(bf)
-  def deserialize(self, bf: BinaryFile):
-    assert(bf.readInt32() == b2_datafile.c_magic)
-    self._id = bf.readInt32()
-    self._name = bf.readString()
-    self._path = bf.readString()
-    flen = bf.readInt32()
-    assert(bf.readInt32() == b2_datafile.c_magic)
-    for i in range(0, flen):
-      f = b2_framedata()
-      f.deserialize(bf)
-      self._frames.append(f)
-class b2_framedata:
-  def __init__(self):
-    self._iid: int = -1  # island id
-    self._x: int = -1
-    self._y: int = -1
-    self._w: int = -1
-    self._h: int = -1
-    self._imgs = []  # abs path to layers, temp
-  def serialize(self, bf: BinaryFile):
-    bf.writeInt32(b2_datafile.c_magic)
-    bf.writeInt32(self._iid)
-    bf.writeInt32(self._x)
-    bf.writeInt32(self._y)
-    bf.writeInt32(self._w)
-    bf.writeInt32(self._h)
-    bf.writeInt32(len(self._imgs))
-    bf.writeInt32(b2_datafile.c_magic)
-    for img in self._imgs:
-      bf.writeString(img)
-  def deserialize(self, bf: BinaryFile):
-    assert(bf.readInt32() == b2_datafile.c_magic)
-    self._iid = bf.readInt32()
-    self._x = bf.readInt32()
-    self._y = bf.readInt32()
-    self._w = bf.readInt32()
-    self._h = bf.readInt32()
-    ilen = bf.readInt32()
-    assert(bf.readInt32() == b2_datafile.c_magic)
-    # msg(str(+ " " + str(self._iid) + " " + str(self._x) + " " + str(self._y) + " " + str(self._w) + " " + str(self._h) + " ")
-    for i in range(0, ilen):
-      self._imgs.append(bf.readString())
+    self._name = "hello world"
+    test = "\" hi \'"
 
-class RenderInfo:
-  # temp info for render
-  _render_width: int = 0
-  _render_height: int = 0
-  _camera = None
-  _empty = None
-  _customCamera = False
-  _camname = '__b26camera'
-  _empname = '__b26empty'
-  _dbg_renderCount = 0
-  _compNodes: dict = {}
+
+    
+
+
+
+
+
+
+
+
+
+
+
+"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+d"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
