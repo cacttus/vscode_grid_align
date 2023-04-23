@@ -404,11 +404,8 @@ class b2_objdata:
     for i in range(0, len(self._actions)):
       self._actions[i].serialize(bf)
   def deserialize(self, bf: BinaryFile):
-    assert(bf.readInt32() == b2_datafile.c_magic)
-    self._id = bf.readInt32()
-    self._name = "hello world"
-    test = "\" hi \'"
-
+    hello_world = "\"hello world\""
+    
 
     
 
