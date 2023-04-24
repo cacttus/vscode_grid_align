@@ -8,18 +8,28 @@ import * as path from 'path';
 import { Console } from 'console';
 import { EOL } from 'os';
 import { log } from 'console';
+import { inherits } from 'util';
+import * as fs from 'fs';
 
-let enable_debug = true
-let enable_testing = true
+enum LangType { CS_CPP_JS, PYTHON }
+
+var g_enable_debug = true
+var g_enable_testing = false
+var g_lang_type = LangType.PYTHON
 
 function Assert(x: boolean | number, s: string = "Assertion failed") {
   if (
     ((typeof x == 'boolean') && (x as boolean === false)) ||
     ((typeof x == 'number') && (x as number === 0))
   ) {
+    dbg(s)
     Gu.debugBreak();
-    throw new Error(s)
+    Raise(s)
+
   }
+}
+function Raise(x: string) {
+  throw new Error(x)
 }
 function dbg(v: string | Error) {
   if (Gu.Debug) {
@@ -73,7 +83,7 @@ class Test {
     }
 
     debugger;
-    throw new Error(str)
+    Raise(str)
   }
   public static fail_if(b: boolean = true, s: string = "test failed") {
     if (b) {
@@ -86,10 +96,31 @@ class Test {
 
 }
 class Gu {
-  public static Debug = enable_debug
-  public static Testing = enable_testing
+  public static readonly c_invalid_hash = 0
+
+  public static Debug = g_enable_debug
+  public static Testing = g_enable_testing
   public static EnableDebugBreak = true
 
+
+  public static hash_ints(items: Array<number>, hash: number = 0) {
+    for (let i = 0; i < items.length; i++) {
+      hash = (((hash << 5) - hash) + (items[i] | 0)) | 0;
+    }
+    return hash
+  }
+  public static hash_strings(items: Array<string>, hash: number = 0) {
+    for (let i = 0; i < items.length; i++) {
+      hash = Gu.hash_string(items[i], hash)
+    }
+    return hash
+  }
+  public static hash_string(item: string, hash: number = 0) {
+    for (let i = 0; i < item.length; i++) {
+      hash = (((hash << 5) - hash) + (item.charCodeAt(i) | 0)) | 0;
+    }
+    return hash
+  }
   public static escapeRegexChars(str: string) {
     return str.replace(new RegExp('[.\\\\+*?\\[\\^\\]$(){}=!<>|:\\-]', 'g'), '\\$&')
   }
@@ -134,6 +165,9 @@ class Gu {
 
   public static run_tests() {
     Test.run_tests(() => {
+      let yacc: Lang = Lang.load("./py.y")
+      let lex: Lex = new Lex(yacc)
+
       dbg("escaped=" + Gu.escape("0\b1\f2\n3\r4\t5\v6"))
       dbg("escaped=" + Gu.escape("0\f1\n2\r3\t4\v5"))
       dbg("escaped=" + Gu.escape("0\b1\f2\n3\r4\t5"))
@@ -141,7 +175,7 @@ class Gu {
     })
   }
   public static test_trees() {
-    let tr = new LexNode<string, number>("");
+    let tr = new LexTree<string, number>((x: string, y: string) => { return x === y; });
     let nk = [], nv = [];
     nk.push("world")
     nk.push("hello")
@@ -192,84 +226,74 @@ class Gu {
 //=============================================================================
 
 enum Align { Left, Right, None }
-enum LangType { CS_CPP_JS, PYTHON }
-enum TokType {
-  UNDEFINED, ID,
-  WS, NL,
-  DQUOT, SQUOT, DQUOT_ES, SQUOT_ES,
-  COMMA, DOT, COL, SCOL,
-  BCOMB, BCOME, LCOM,
-  EQ_CMP, EQ_ASN, GT, LT, GTE, LTE,
-  LPAREN, RPAREN, LSBR, RSBR, LCBR, RCBR,
-  ARROW, QM
-}
-enum RuleType {
-  LITERAL
-}
-class Tok {
-  public _hash: number
-  public _var: boolean
-  public _value: string = "";
-  public _types: Array<TokType> = new Array<TokType>();
-  public value(): string { return this._value; }
-
-  public constructor(v: string, types: Array<TokType>, variable: boolean) {
-    this._value = v;
-    this._var = variable
-    this._types = [...types];
-    this._hash = 0
-    for (let i = 0; i < types.length; i++) {
-      this._hash = ((this._hash << 5) - this._hash) + (types[i] | 0);
-      this._hash |= 0; // Convert to 32bit integer
-    }
-  }
-  public match(t: TokType): boolean {
-    for (let i = 0; i < this._types.length; i++) {
-      if (this._types[i] == t) {
-        return true
-      }
-    }
-    return false
-  }
-  public toString() {
-    let val = "";
-    let app = ""
-    for (let [ti, tt] of this._types.entries()) {
-      val += "" + app + TokType[tt]
-      app = ","
-    }
-    return val
-  }
-}
-
 class LexNode<Tk, Tv> {
   public _key: Tk
   public _val: Tv | null = null
   public _nodes: Array<LexNode<Tk, Tv>> | null = null
-  public _depth: number
+  private _parent: LexNode<Tk, Tv> | null = null
 
-  public constructor(key: Tk, depth: number = -1) {
+  public constructor(key: Tk, parent: LexNode<Tk, Tv> | null) {
     this._key = key;
-    this._depth = depth
+    this._parent = parent
   }
-  public toString(sp: number = 0, str = "") {
-    let st = { _str: "" }
-    this._toString(st, sp, str, -1)
-    let colsize = -1
-    let x = (st._str as string).split('\n')
-    for (let i = 0; i < x.length; i++) {
-      colsize = Math.max(colsize, x[i].length)
+  protected root(): LexNode<Tk, Tv> {
+    let x: LexNode<Tk, Tv> = this
+    while (x._parent != null) {
+      x = x._parent;
     }
-    st._str = ""
-    this._toString(st, sp, str, colsize)
-    return st._str
+    return x;
   }
-  private _toString(st: any, sp: number, str: string, colsize: number) {
-    let val_str = "" + this._key
-    if (Gu.is_string(this._key)) {
-      val_str = Gu.escape(this._key as string)
+  protected _put(keys: Tk[], val: Tv, off: number, len: number, compare: KeyCompareFunc<Tk>, idx: number) {
+    if (idx + 1 == len) {
+      if (this._val != null) {
+        msg(this.root().toString())
+        Raise("Ambiguous symbol: '" + val + "' already defined as: '" + this._val + "'")
+      }
+      this._val = val
     }
-    str += " ".repeat(sp) + "-> '" + val_str + "'"
+    else {
+      if (this._nodes == null) {
+        this._nodes = new Array<LexNode<Tk, Tv>>()
+      }
+      for (let [ni, n] of this._nodes.entries()) {
+        if (compare(n._key, keys[idx + 1])) {
+          n._put(keys, val, off, len, compare, idx + 1)
+          return
+        }
+      }
+
+      this._nodes.push(new LexNode<Tk, Tv>(keys[idx + 1], this))
+      this._nodes[this._nodes.length - 1]._put(keys, val, off, len, compare, idx + 1)
+    }
+  }
+  protected _get(keys: Tk[], off: number, len: number, compare: KeyCompareFunc<Tk>, idx: number): LexNode<Tk, Tv> | null {
+    if (idx <= len) {
+      if (idx + 1 === len) {
+        return this;
+      }
+      else if (this._nodes != null) {
+        for (let [ni, n] of this._nodes.entries()) {
+          let k0 = n._key
+          let k1 = keys[off + idx + 1]
+          if (compare(k0, k1)) {
+            let res = n._get(keys, off, len, compare, idx + 1)
+            if (res != null) {
+              return res
+            }
+          }
+        }
+      }
+    }
+    return null
+  }
+  protected _toString(st: any, sp: number, str: string, colsize: number) {
+    if (this._parent === null) {
+      str = "root"
+    }
+    else {
+      str += " ".repeat(sp) + "-> '" + LexNode.strval(this._key, true) + "'"
+    }
+
     if (this._nodes != null) {
       for (let [ni, n] of this._nodes!.entries()) {
         n._toString(st, 2, str, colsize)
@@ -280,81 +304,65 @@ class LexNode<Tk, Tv> {
       if (colsize > 0) {
         colsp = " ".repeat(colsize - str.length)
       }
-      str += colsp + " [" + this._val!.toString() + "]\n"
+      str += colsp + " [" + LexNode.strval(this._val, false) + "]\n"
       st._str += str
     }
     return st
   }
-  public get(keys: Tk[], off: number = 0, len: number = -1, compare: ((k0: Tk, k1: Tk) => boolean) | null = null, idx: number = -1): LexNode<Tk, Tv> | null {
-    if (len == -1) {
-      len = keys.length
+  private static strval(x: any, name: boolean) {
+    let val_str = ""
+    if (Gu.is_string(x)) {
+      val_str = Gu.escape(x as string)
     }
-    return this._get(keys, off, len, compare, -1)
-  }
-  private _get(keys: Tk[], off: number, len: number, compare: ((k0: Tk, k1: Tk) => boolean) | null, idx: number): LexNode<Tk, Tv> | null {
-    if (idx <= len) {
-      if (idx + 1 === len) {
-        return this;
-      }
-      else if (this._nodes != null) {
-        for (let [ni, n] of this._nodes.entries()) {
-          let equals: boolean = false
-          let k0 = n._key
-          let k1 = keys[off + idx + 1]
-          if (compare != null) {
-            compare(k0, k1)
-          }
-          else {
-            equals = (k0 === k1)
-          }
-          if (equals) {
-            let res: any = n._get(keys, off, len, compare, idx + 1)
-            if (res != null) {
-              return res
-            }
-          }
-        }
-      }
-    }
-    return null
-  }
-  public put(keys: Tk[], val: Tv, off: number = 0, len: number = -1, insert: ((n: LexNode<Tk, Tv>, v: Tv) => void) | null = null) {
-    if (len == -1) {
-      len = keys.length
-    }
-    this._put(keys, val, off, len, insert, -1);
-  }
-  private _put(keys: Tk[], val: Tv, off: number, len: number, insert: ((n: LexNode<Tk, Tv>, v: Tv) => void) | null, idx: number) {
-    Assert(val != null, "value is null");
-
-    if (idx + 1 == len) {
-      if (insert != null) {
-        insert(this, val);
+    else if (x instanceof Tok) {
+      if (name) {
+        val_str = (x as Tok)._name
       }
       else {
-        Assert(this._val == null, "_val is not null");
-        this._val = val
+        if ((x as Tok)._value.length) {
+          val_str = Gu.escape((x as Tok)._value)
+        }
+        else {
+          for (let rr = 0; rr < (x as Tok)._rules.length; rr++) {
+            val_str += "" + (x as Tok)._rules[rr]
+          }
+        }
       }
     }
     else {
-      if (this._nodes == null) {
-        this._nodes = new Array<LexNode<Tk, Tv>>()
-      }
-      for (let [ni, n] of this._nodes.entries()) {
-        if (n._key == keys[idx + 1]) {
-          n._put(keys, val, off, len, insert, idx + 1)
-          return
-        }
-      }
-
-      this._nodes.push(new LexNode<Tk, Tv>(keys[idx + 1], idx + 1))
-      this._nodes[this._nodes.length - 1]._put(keys, val, off, len, insert, idx + 1)
+      val_str = "" + x
     }
+    return val_str
   }
-  public match(items: Array<Tk>, offset: number, compare: any = null): Tv | null {
+}
+type KeyCompareFunc<Tk> = ((k0: Tk, k1: Tk) => boolean)
+class LexTree<Tk, Tv> extends LexNode<Tk, Tv> {
+  private _compare: KeyCompareFunc<Tk>;
+  public constructor(func: KeyCompareFunc<Tk>) {
+    super({} as Tk, null)
+    this._compare = func
+  }
+  public put(keys: Tk[], val: Tv, off: number = 0, len: number = -1) {
+    Assert(val != null, "value is null");
+    Assert(keys.length > 0) //cannot put values on root
+    if (len == -1) {
+      len = keys.length
+    }
+    this._put(keys, val, off, len, this._compare, -1);
+  }
+  public get(keys: Tk[], off: number = 0, len: number = -1, compare: KeyCompareFunc<Tk> | null = null): LexNode<Tk, Tv> | null {
+    if (len == -1) {
+      len = keys.length
+    }
+    return this._get(keys, off, len, this._compare, -1)
+  }
+  public match(items: Array<Tk>, offset: number, k: number = -1): Tv | null {
     let best: Tv | null = null
-    for (let ci = offset + 1; ci <= items.length; ci++) {
-      let got = this.get(items, offset, offset + ci, compare)
+    if (k < 0) {
+      k = items.length;
+    }
+    for (let ci = offset + 1; ci <= k; ci++) {
+      let got = this.get(items, offset, ci - offset)
       if (got != null) {
         if (got._val != null) {
           best = got._val;
@@ -366,214 +374,280 @@ class LexNode<Tk, Tv> {
     }
     return best
   }
+  public toString(sp: number = 0, str = "") {
+    let st = { _str: "" }
+    this._toString(st, sp, str, -1)
+    let colsize = -1
+    let x = (st._str as string).split('\n')
+    for (let i = 0; i < x.length; i++) {
+      colsize = Math.max(colsize, x[i].length)
+    }
+    st._str = "==TREE==\n"
+    this._toString(st, sp, str, colsize)
+    return st._str
+  }
+}
+class SymTree extends LexTree<string, Tok> {
+  constructor() {
+    super((k0: string, k1: string) => { return k0 === k1; })
+  }
+}
+class RuleTree extends LexTree<Tok, Tok> {
+  constructor() {
+    super((k0: Tok, k1: Tok) => { return k0.equals(k1); })
+  }
+}
+type Sym = number
+enum Syms {
+  UNDEFINED,
+  ID, NL, IGNORE, SP, TAB, WS,
+  //ycc
+  Y_TOKN, Y_COL, Y_SEM, Y_PIPE, Y_HASH,
+  Y_LCOM, Y_SECTION, Y_RULE, Y_RULES,
+}
+class Tok {
+  public readonly _sym: Sym
+  // public _sym: Sym
+  public _name: string
+  public _value: string
+  public _rules: Array<Array<Sym>>
+  //public readonly _toks: Array<Sym>
+  //private _value: string | null //defined from ycc file if rule, or actual string value of token if parsed
+  //value: string | null, - looked up via symbol table
+
+  //syms: Array<Sym>, 
+  public constructor(sym: Sym, name: string, value: string, rules: Array<Array<Sym>>) {
+    // this._term = term;
+    this._sym = sym
+    this._value = value
+    this._name = name
+    this._rules = rules
+    // this._toks = syms
+    //this._value = value
+    // let hash = Gu.hash_ints([sym])
+    // if (syms) {
+    //   this._toks = [...syms]
+    //   hash = Gu.hash_ints(this._toks, hash)
+    // }
+
+    // this._hash = hash
+  }
+  public match(x: Sym): boolean {
+    return this._sym === x
+  }
+  public equals(x: Tok): boolean {
+    return this._sym === x._sym
+  }
+  public toString() {
+    if(this._value.length){
+      return this._value
+    }
+    else{
+      return this._name
+    }
+  }
 
 }
-class Rule {
-  public _toks: Array<Tok | Rule>
-  public _type: RuleType
-  public constructor(rt: RuleType, tt: Array<Tok | Rule>) {
-    this._toks = tt
-    this._type = rt
-  }
-  public value(): string {
-    let ss = ""
-    for (let ti2 = 0; ti2 < this._toks.length; ti2++) {
-      ss += this._toks[ti2].value();
-    }
-    return ss
-  }
-}
+
 class Lang {
-  public _lang: LangType
-  public _tok_tree: LexNode<string, Tok>;
-  public _rule_tree: LexNode<Tok, Rule>;
-  public _toks: Map<TokType, Tok> = new Map<TokType, Tok>()
-  public _rules: Map<RuleType, Rule> = new Map<RuleType, Rule>()
+  public _rules: Map<Sym, Tok> = new Map<Sym, Tok>()
+  public _sym_tree: SymTree;
+  public _rule_tree: RuleTree;
 
-  public constructor(lt: LangType, lc: string, bcb: string, bce: string) {
-    this._lang = lt
-    this._tok_tree = new LexNode<string, Tok>("")
-    let addtk = (ts: string, tt: TokType, variable_value: boolean = false) => {
-      let tk = new Tok(ts, [tt], variable_value)
-      let n = this._tok_tree.get(ts.split(''))
-      if (n != null && n._val != null) {
-        n._val._types.push(tt)
-      }
-      else {
-        this._tok_tree.put(ts.split(''), tk)
-      }
-      this._toks.set(tt, tk)
+  public constructor(inptu_rules: Map<Sym, Tok>) {
+    this._rule_tree = new RuleTree()
+
+    //syms map
+    this._rules = new Map<Sym, Tok>
+    this._rules.set(Syms.ID, new Tok(Syms.ID, "ID", "", []))
+    this._rules.set(Syms.IGNORE, new Tok(Syms.IGNORE, "IGNORE", "", []))
+
+    for (let [tt, tk] of inptu_rules.entries()) {
+      msg("" + tk.toString())
+      Assert(this._rules.get(tt) === undefined)
+      this._rules.set(tt, tk)
     }
-    //default
-    addtk("", TokType.ID, true)
-    addtk("\n", TokType.NL)
-    addtk(" ", TokType.WS)
-    addtk("\t", TokType.WS)
 
-    //lang
-    addtk("\"", TokType.DQUOT)
-    addtk("\'", TokType.SQUOT)
-    addtk("\\\"", TokType.DQUOT_ES)
-    addtk("\\\'", TokType.SQUOT_ES)
-    addtk(",", TokType.COMMA)
-    addtk(".", TokType.DOT)
-    addtk(":", TokType.COL)
-    addtk(";", TokType.SCOL)
-    addtk("->", TokType.ARROW)
-    addtk("?", TokType.QM)
-    addtk("=", TokType.EQ_ASN)
-    addtk("==", TokType.EQ_CMP)
-    addtk(">=", TokType.GTE)
-    addtk("<=", TokType.LTE)
-    addtk(">", TokType.GT)
-    addtk("<", TokType.LT)
-    addtk("[", TokType.LSBR)
-    addtk("]", TokType.RSBR)
-    addtk("{", TokType.LCBR)
-    addtk("}", TokType.RCBR)
-    addtk("(", TokType.LPAREN)
-    addtk(")", TokType.RPAREN)
-    addtk(lc, TokType.LCOM)
-    addtk(bcb, TokType.BCOMB)
-    addtk(bce, TokType.BCOME)
-
-    this._rule_tree = new LexNode<Tok, Rule>(new Tok("", [TokType.UNDEFINED], false))
-    let addrule = (rt: RuleType, tt: Array<TokType>) => {
-      let tarr: Array<Tok> = []
-      for (let i = 0; i < tt.length; i++) {
-        if (tt[i] == TokType.ID) {
-          var n = 0
-        }
-        let tok = this._toks.get(tt[i])
-        if (tok != null) {
-          tarr.push(tok)
-        }
-        else {
-          throw Error("tok '" + TokType[tt[i]] + "' not found")
-        }
+    //add symbols 
+    this._sym_tree = new SymTree()
+    for (let [rt, tk] of this._rules.entries()) {
+      if (tk._value.length) {
+        Assert(this._sym_tree.match(tk._value.split(''), 0) == null)
+        this._sym_tree.put(tk._value.split(''), tk)
       }
-      let rule = new Rule(rt, tarr)
-      this._rule_tree.put(tarr, rule)
-      this._rules.set(rt, rule)
     }
-    addrule(RuleType.LITERAL, [TokType.DQUOT, TokType.ID, TokType.DQUOT])
-    addrule(RuleType.LITERAL, [TokType.SQUOT, TokType.ID, TokType.SQUOT])
+    if (Gu.Debug) {
+      msg(this._sym_tree.toString())
+    }
 
-    if (Gu.Testing) {
-      msg(this._tok_tree.toString())
+    //add rules 
+    for (let [tt, tk] of this._rules.entries()) {
+      let rule = this._rules.get(tt)
+      Assert(rule !== undefined)
+
+      for (let [ri, rts] of tk._rules.entries()) {
+        let reduction: Array<Tok> = []
+        for (let [riti, rt] of rts.entries()) {
+          let tok = this._rules.get(rt)
+          Assert(tok != null, "could not find rule '" + tk.toString() + "' (" + rt + ")")
+          reduction.push(tok!)
+        }
+        this._rule_tree.put(reduction, rule!)
+
+      }
+    }
+    if (Gu.Debug) {
       msg(this._rule_tree.toString())
-      //let n = this._tree.get(">=".split(''))
-      //msg("this._tree.get()=" + n!._val)
-      //let n = this._tree.get("\\\"".split(''))
-      //msg("this._tree.get()=" + n!._val)
     }
-  }
-}
-class Lex {
-  public in_dq = false;
-  public in_sq = false;
-  public in_bc = false;
-  public in_lc = false;
-  public tokens: Array<Tok> = Array<Tok>();
 
-  public _lang: Lang;
-  public _term = ""
+  }
+  // public sym(s: Sym): string | undefined {
+  //   let xx = this._rules.get(s);
+  //   return xx
+  // }
+  public rule(s: Sym): Tok | undefined { return this._rules.get(s); }
+  public static load(yfile: string): Lang {
+    //let syms = new Map<Sym, string>()
+    let rules = new Map<Sym, Tok>//Map<Sym, Array<Array<Sym>>>()
+    let sym = (k: Sym, v: string) => {
+      Assert(rules.get(k) === undefined)
+      rules.set(k, new Tok(k, Syms[k], v, []))
+    }
+    let rule = (k: Sym, v: Array<Array<Sym>>) => {
+      Assert(rules.get(k) === undefined)
+      rules.set(k, new Tok(k, Syms[k], "", v))
+    }
+
+    sym(Syms.Y_COL, ":")
+    sym(Syms.Y_SEM, ";")
+    sym(Syms.Y_PIPE, "|")
+    sym(Syms.Y_HASH, "#")
+    sym(Syms.Y_TOKN, "%token")
+    sym(Syms.Y_SECTION, "%%")
+    sym(Syms.NL, "\n")
+    sym(Syms.TAB, "\t")
+    sym(Syms.SP, " ")
+
+    rule(Syms.WS, [[Syms.SP, Syms.TAB]])
+    rule(Syms.Y_LCOM, [[Syms.Y_HASH, Syms.IGNORE, Syms.NL]])
+    rule(Syms.Y_RULE, [[Syms.ID, Syms.Y_COL, Syms.Y_RULES, Syms.Y_SEM]])
+    rule(Syms.Y_RULES, [[Syms.ID, Syms.Y_RULES]])
+
+    // this._rules.set(Syms.WS, new Tok(Syms.WS, "WS", "WS", []))
+    // this._rules.set(Syms.NL, new Tok(Syms.NL, "NL", "\n", []))
+    // this._rules.set(Syms.SP, new Tok(Syms.SP, "SP", " ", []))
+    // this._rules.set(Syms.TAB, new Tok(Syms.TAB, "TAB", "\t", []))
+
+    let lang = new Lang(rules)
+    let text = fs.readFileSync(yfile).toString('utf-8')
+    let lex = new Lex(lang)
+    let toks = lex.parse(text, (x, y) => { })
+    msg("==ALL TOKENS==")
+    let st = ""
+    for (let [ti, t] of toks.entries()) {
+      st+=(t.toString())
+    }
+    msg(st)
+
+    //TODO:
+    let res = new Lang(rules)
+    return res
+  }
+
+
+}
+type ParseCallback = (idx: number, text: string) => void;
+class Lex {
+  private _ignore = false;
+  private _parsed: Array<Tok> = Array<Tok>();
+  private _lexed: Array<Tok> = Array<Tok>();
+  private _lang: Lang;
+  private _term = ""
+  private _k = 1
 
   public constructor(lang: Lang) {
     this._lang = lang;
   }
-
-  public parse(text: string, func: any) {
-    //parse whole block
+  public parse(text: string, callback: ParseCallback, k: number = 1): Array<Tok> {
+    Assert(k > 0)
+    this._k = k
+    this.tokenize(text, callback)
+    this.lex()
+    return this._lexed
+  }
+  private tokenize(text: string, callback: ParseCallback) {
+    this._parsed = []
     let chars = text.split('')
-
     for (let ci = 0; ci < chars.length;) {
       let ci_save = ci
       let advance = this.token(chars, ci);
       ci += advance
-      func(ci_save, text);
-    }
-    let ttype = []
-    for (let ti = 0; ti < this.tokens.length; ti++) {
-      ttype.push(this.tokens[ti])
-    }
-    let new_tokens: Array<Tok> = []
-    for (let ti = 0; ti < this.tokens.length; ti++) {
-      let rule = this._lang._rule_tree.match(this.tokens, ti, (k0: Tok, k1: Tok) => {
-        return k0._hash == k1._hash
-      })
-      if (rule != null) {
-        let ss = ""
-        for (let ti2 = 0; ti2 < rule._toks.length; ti2++) {
-          ss += rule._toks[ti2].value();
-        }
-        msg("Rule: " + ss)
+      if (callback) {
+        callback(ci_save, text);
       }
     }
-    this.tokens = new_tokens
+  }
+  private lex() {
+    //LR(k) => reduction / shift
+    this._lexed = []
+    for (let ti = 0; ti < this._parsed.length; ti++) {
+      let rule = this._lang._rule_tree.match(this._parsed, ti)
+      if (rule != null) {
+        //** this is incorrect, we need to replace the given rules with the reduction, with slice()
+        //this._lexed.push(rule)
+        //ti += rule._toks!.length
+      }
+      else {
+        this._lexed.push(this._parsed[ti])
+      }
+    }
   }
   private token(chars: Array<string>, off: number) {
-    let tok = this._lang._tok_tree.match(chars, off)
+    let advance = 0
+
+    let tok = this._lang._sym_tree.match(chars, off)
     if (tok != null) {
-      msg("tok="+tok!._value)
-      if (this.ignore()) {
-        //check to exit ignore
-        if (tok.match(TokType.SQUOT) && this.in_sq) {
-          this.in_sq = false;
-        }
-        else if (tok.match(TokType.DQUOT) && this.in_dq) {
-          this.in_dq = false
-        }
-        else if (tok.match(TokType.BCOME) && this.in_bc) {
-          this.in_bc = false
-        }
-        else if (tok.match(TokType.NL) && this.in_lc) {
-          this.in_lc = false
-        }
+      //msg("tok='" + tok._value + "'")
+      if (this._ignore && tok.match(Syms.IGNORE)) {
+        this._ignore = false
       }
     }
 
-    if (tok != null && !this.ignore()) {
-      if (tok.match(TokType.SQUOT)) {
-        this.in_sq = true;
-      }
-      else if (tok.match(TokType.DQUOT)) {
-        this.in_dq = true;
-      }
-      else if (tok.match(TokType.BCOMB)) {
-        this.in_bc = true
-      }
-      else if (tok.match(TokType.LCOM)) {
-        this.in_lc = true
+    if (tok != null && !this._ignore) {
+      if (tok.match(Syms.IGNORE)) {
+        this._ignore = true;
       }
 
-      if (Gu.Debug) {
-        let st = "delims=[" + tok.toString() + "]"
-        if (this._term.length) { st = "term='" + this._term + "' " + st }
-        msg(st)
-      }
+      // if (Gu.Debug) {
+      //   let st = "delims=[" + tok.toString() + "]"
+      //   if (this._term.length) {
+      //     st = "term='" + this._term + "' " + st
+      //   }
+      //   msg(st)
+      // }
 
       if (this._term.length) {
-        this.tokens.push(new Tok(this._term, [TokType.ID], true))
+        this._parsed.push(new Tok(Syms.ID, "ID", this._term, []))
         this._term = ""
       }
-      this.tokens.push(tok)
-      return tok._value.length
+      this._parsed.push(tok)
+      advance = tok.toString().length
     }
     else {
       this._term += chars[off];
       if (tok != null) {
-        this._term += tok._value //ignored
-        return tok._value.length
+        this._term += tok.toString()
+        advance = tok.toString().length
       }
       else {
-        return 1
+        advance = 1
       }
     }
+
+    Assert(advance > 0)
+    return advance
   }
-  private ignore() {
-    return this.in_dq || this.in_sq || this.in_bc || this.in_lc
-  }
+
 
 }
 class Col {
@@ -583,46 +657,23 @@ class Col {
     this._delim = dd;
   }
 }
-class Cell {
-  public _delim: Tok
-  public _col: Col | null = null
-  public constructor(dd: Tok) {
-    this._delim = dd
-  }
-}
 class FormatRegion {
   public _cols: Array<Col> = [];
-  public _cell_lines: Array<Array<Cell>> = []
-  public _linecount: number = 0;
+  public _lines: Array<Array<Tok>> = []
 }
 class TextGrid {
-  public _line_cells: Array<Cell> = []
-  public _text_unmodified: string = ""
+  public _lang: Lang
   public _text: string = ""
   public _max_indent = 0;
   public _min_indent = 99999999;
   public _aligned: boolean = false;
+
+  public _line: Array<Tok> = []
   public _regions: Array<FormatRegion> = []
-  public _lex: Lex;
-  private _langs: Array<Lang> = [
-    new Lang(LangType.CS_CPP_JS, "//", "/*", "*/"),
-    new Lang(LangType.PYTHON, "#", "'''", "'''",)
-  ];
-  public constructor(text: string, lt: LangType) {
-    this._text_unmodified = text;
+
+  public constructor(text: string, l: Lang) {
     this._text = text;
-    text.replace(/\t/, " ")
-    text.replace(/\r/, "")
-    this._text += "\n" //account for \0 without needing extra toke
-    let tlang: any = null;
-    for (let [idx, l] of this._langs.entries()) {
-      if (l._lang == lt) {
-        tlang = l;
-        break;
-      }
-    }
-    Assert(tlang != null)
-    this._lex = new Lex(tlang);
+    this._lang = l
   }
   private region() {
     if (this._regions.length == 0) {
@@ -638,13 +689,13 @@ class TextGrid {
       this._min_indent = indent;
     }
   }
-
   private align() {
     let started = false;
     let indent = 0;
 
     let that = this;
-    this._lex.parse(this._text, (ci: number, text: string) => {
+    let lex = new Lex(this._lang);
+    let tokens = lex.parse(this._text, (ci: number, text: string) => {
       if (started == false) {
         if (text[ci] == ' ' || text[ci] == '\t') {
           indent++;
@@ -655,39 +706,34 @@ class TextGrid {
         }
       }
     });
-    let s = ""
+    //combine all tokens that are not align delims into a rule
+    // let comb = []
+    // for (let [i, tk] of tokens.entries()) {
 
-    let app = ""
-    for (let [i, tk] of this._lex.tokens.entries()) {
-      if (tk.match(TokType.ID)) {
-        s += app + " '" + tk._value + "'"
-      }
-      else {
-        s += app + " " + tk.toString() + ""
-      }
+    //   this.addcell(tk, i == tokens.length - 1)
+    // }
+    // tokens = comb
 
-      app = ","
-      this.add(tk)
+    for (let [i, tk] of tokens.entries()) {
+      this.addcell(tk, i == tokens.length - 1)
     }
-    msg("tokens=" + s)
   }
-  private add(tk: Tok) {
-    this._line_cells.push(new Cell(tk))
+  private addcell(tk: Tok, eof: boolean) {
+    this._line.push(tk)
 
-    if (tk.match(TokType.NL)) { //eol
+    if (tk.match(Syms.NL) || eof) { //eol
       let newregion: boolean = false
       let r = this.region()
       if (r == null) {
         newregion = true;
       }
       else if (r._cols.length > 0) {
-        for (let [ci, cc] of this._line_cells.entries()) {
-          let rc = r._cols[ci]
-          if (ci >= r._cols.length) {
-            //create new cols
+        for (let [lci, lcc] of this._line.entries()) {
+          let rc = r._cols[lci]
+          if (lci >= r._cols.length) {
             break;
           }
-          if (rc._delim != cc._delim && !rc._delim.match(TokType.NL) && !cc._delim.match(TokType.NL)) {
+          if (rc._delim != lcc && !rc._delim.match(Syms.NL) && !lcc.match(Syms.NL)) {
             newregion = true
             break;
           }
@@ -699,20 +745,21 @@ class TextGrid {
       }
 
       if (r != null) {
-        if (this._line_cells.length > r._cols.length) {
-          for (let i = 0; i < this._line_cells.length; i++) {
-            if (i >= r._cols.length) {
-              r._cols.push(new Col(this._line_cells[i]._delim))
+        msg("tk.value=" + tk.toString())
+        if (this._line.length > r._cols.length) {
+          for (let tli = 0; tli < this._line.length; tli++) {
+            if (tli >= r._cols.length) {
+              r._cols.push(new Col(this._line[tli]))
             }
-            if (tk._value.length > r._cols[i]._size) {
-              r._cols[i]._size = tk._value.length;
+            if (tk.toString().length > r._cols[tli]._size) {
+              r._cols[tli]._size = tk.toString().length;
             }
           }
         }
-        r._cell_lines.push(this._line_cells)
+        r._lines.push(this._line)
       }
 
-      this._line_cells = []
+      this._line = []
     }
 
   }
@@ -723,19 +770,19 @@ class TextGrid {
     let indent = " ".repeat(this._max_indent);
 
     for (const r of this._regions) {
-      for (let li = 0; li < r._cell_lines.length; li++) {
+      for (let li = 0; li < r._lines.length; li++) {
         text += indent
 
-        for (let ci = 0; ci < r._cell_lines[li].length; ci++) {
+        for (let ci = 0; ci < r._lines[li].length; ci++) {
           let col = r._cols[ci]
-          let cell = r._cell_lines[li][ci];
+          let cell = r._lines[li][ci];
           let gap = ""
-          if (cell._delim._value.length > 0) {
-            let scount = col._size - cell._delim._value.length;
+          if (cell.toString().length > 0) {
+            let scount = col._size - cell.toString().length;
             Assert(scount >= 0);
             let gap = " ".repeat(scount);
           }
-          text += cell._delim._value + gap + col._delim?._value;
+          text += cell.toString() + gap + col._delim?.toString();
           // if (ci < r._cols.length - 1) {
           //   lines[i] += " "
           // }
@@ -748,7 +795,7 @@ class TextGrid {
       msg("======RES=======")
       msg(text)
       msg("======END=======")
-      return this._text_unmodified;
+      return this._text;
     }
     else {
       return text;
@@ -770,10 +817,12 @@ function grid_align() {
         if (sel) {
           let r = new vscode.Range(sel.start.line, sel.start.character, sel.end.line, sel.end.character);
           const text = editor.document.getText(r);
-          let tg: TextGrid = new TextGrid(text, LangType.PYTHON);
-          editor.edit(eb => {
-            eb.replace(r, tg.toString());
-          });
+          if (text.length) {
+            let tg: TextGrid = new TextGrid(text, Lang.load("/home/mario/git/vscode_gridalign/src/py.y"));
+            editor.edit(eb => {
+              eb.replace(r, tg.toString());
+            });
+          }
         }
       }
     }
@@ -784,6 +833,7 @@ function grid_align() {
 export function activate(context: vscode.ExtensionContext) {
   if (Gu.Debug) {
     let once = false
+
     vscode.window.onDidChangeTextEditorSelection((e: vscode.TextEditorSelectionChangeEvent) => {
       if (once == false) {
         //  grid_align()

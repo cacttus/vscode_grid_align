@@ -404,7 +404,10 @@ class b2_objdata:
     for i in range(0, len(self._actions)):
       self._actions[i].serialize(bf)
   def deserialize(self, bf: BinaryFile):
-    hello_world = "\"hello world\""
+"hello world"
+x = y, z
+x = y
+x = y, z + w
     
 
     
