@@ -11,3 +11,4 @@ Grid align macro for VScode.
 same token in token tree
 remove alignment on Tok
 
+chars to numbers charCodeAt and convert(utf-8)
