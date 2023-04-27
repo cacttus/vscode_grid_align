@@ -172,6 +172,8 @@ class Gu {
 
   public static run_tests() {
     Test.run_tests(() => {
+      RangeMap.test()
+
       Lang.load("/home/mario/git/vscode_gridalign/src/py.y")
       let yacc: Lang = Lang.load("./py.y")
       let lex: Lex = new Lex(yacc)
@@ -183,7 +185,8 @@ class Gu {
     })
   }
   public static test_trees() {
-    let tr = new LexTree(new Lang());
+    let lang = new Lang()
+    let tr = new LexTree(lang);
     let nk = [], nv = [];
     nk.push("world")
     nk.push("hello")
@@ -195,7 +198,7 @@ class Gu {
     try {
       for (let i = 0; i < nk.length; i++) {
         let rs = Lang.tokens(nk[i])
-        tr.put(Lang.tok_syms(nk[i]), rs[rs.length - 1]);
+        tr.put(lang.infos(Lang.tok_syms(nk[i])), rs[rs.length - 1]);
       }
       Test.success();
     }
@@ -206,7 +209,7 @@ class Gu {
     try {
       for (let i = 0; i < nk.length; i++) {
         let rs = Lang.tokens(nk[i])
-        tr.put(Lang.tok_syms(nk[i]), rs[rs.length - 1]);
+        tr.put(lang.infos(Lang.tok_syms(nk[i])), rs[rs.length - 1]);
       }
       Test.fail()
     }
@@ -235,7 +238,294 @@ class Gu {
 
 //=============================================================================
 
-enum Align { Left, Right, None }
+type Int = number // & { readonly '': unique symbol };
+type RuleKey = number & { readonly '': unique symbol };
+type Char = string
+
+class Range extends Object {
+  public _min: Int
+  public _max: Int
+  public validate() {
+    Assert(this._min <= this._max)
+  }
+  public equals(r: Range | Int) {
+    if (r instanceof Range) {
+      return (this._min === r._min && this._max === r._max)
+    }
+    else {
+      return (this._min === r && this._max === r)
+    }
+  }
+  public static order(min: Int, max: Int): Range {
+    if (min <= max)
+      return new Range(min, max)
+    else
+      return new Range(max, min)
+  }
+  public static chr(min: Char, max: Char | null = null): Range {
+    Assert(min.length === 1)
+    if (max != null) {
+      Assert(max.length === 1)
+      return new Range(min.charCodeAt(0), max.charCodeAt(0))
+    }
+    else {
+      return new Range(min.charCodeAt(0))
+    }
+  }
+  public constructor(min: Int, max: Int | null = null) {
+    super()
+    this._min = min
+    if (max === null) {
+      this._max = this._min
+    }
+    else {
+      this._max = max
+    }
+    this.validate()
+  }
+  public static from(k: Range | Int): Range {
+    let r: Range
+    if (k instanceof Range) {
+      r = new Range(k._min, k._max)
+    }
+    else {
+      r = new Range(k, k)
+    }
+    return r
+  }
+  public has(k: Int) {
+    return this._min <= k && this._max >= k
+  }
+  public compare(r: Range) {
+    this.validate()
+    r.validate()
+    //      *           *
+    //*  *     *  *        *  *   
+    //   -1      0            1
+    if (this._max < r._min) { return -1; }
+    else if (this._min > r._min) { return 1; }
+    return 0
+  }
+  public len() {
+    return this._max - this._min
+  }
+  public override toString(): string {
+    return "(" + this._min + "," + this._max + ")"
+  }
+}
+class Sym extends Range { } //& { readonly '': unique symbol };
+class RMapItem<Tv> extends Object {
+  public readonly _key: Range
+  public _val: Tv
+  public constructor(r: Range, v: Tv) {
+    super()
+    this._key = r//new Range(min, max)
+    this._val = v
+  }
+  public has(k: Int) {
+    return this._key.has(k)
+  }
+  public override toString(): string {
+    return this._key.toString() + " " + this._val
+  }
+}
+class RangeMap<Tv> extends Object {
+  //Range map no collisions allowed
+  public _gr: Range = new Range(0, 0)
+  public _gri: Int = 0
+  public _vals: Array<RMapItem<Tv>> = []
+
+  public set(x: Range | Int, v: Tv) {
+    let k: Range = Range.from(x)
+    let [idx, collision] = this.index(k)
+    Assert(idx >= 0)
+    if (collision) {
+      if (this._vals[idx]._key.equals(x)) {
+        this._vals[idx]._val = v
+      }
+      else {
+        Raise("Range ambiguity: " + x.toString())
+      }
+    }
+    else {
+      let it = new RMapItem<Tv>(k, v)
+      this._vals.splice(idx, 0, it);
+
+      if (this._vals.length === 0) {
+        this._gr = k
+        this._gri = 0
+      } else {
+        if (this._gr.len() < k.len()) {
+          this._gr = k
+          this._gri = idx
+        }
+      }
+    }
+  }
+  public get(x: Range): RMapItem<Tv> | undefined {
+    if (this._vals.length === 0) {
+      return undefined
+    }
+    let i = this.index(Range.from(x._min))[0]
+    if (i < 0 || i >= this._vals.length) {
+      return undefined
+    }
+    if (this._vals[i]._key.equals(x)) {
+      return this._vals[i]
+    }
+    return undefined
+  }
+  public get_all(x: Range | Int, count: Int = -1): Array<RMapItem<Tv>> {
+    let res: Array<RMapItem<Tv>> = new Array<RMapItem<Tv>>()
+    let i0 = 0, i1 = 0
+    let b = false
+    if (x instanceof Range) {
+      i0 = this.index(Range.from(x._min))[0]
+      i1 = this.index(Range.from(x._max))[0]
+    }
+    else {
+      i0 = i1 = this.index(Range.from(x))[0]
+    }
+
+    if (i0 < 0 || i0 > this._vals.length || i1 < 0 || i1 > this._vals.length) {
+    }
+    else {
+      if (i1 === this._vals.length && this._vals.length > 0) {
+        i1 = i1 - 1
+      }
+      if (count === -1) {
+        count = (i1 - i0 + 1)
+      }
+      for (let i = i0; i < (i0 + count); i++) {
+        res.push(this._vals[i])
+      }
+    }
+    return res
+  }
+  private index(r: Range): [Int, boolean] {
+    let ret = -1
+    let i = this._gri
+    let len = this._vals.length - i
+    let off = 0
+    let dbg_last_len = len
+    let dbg_last_off = off
+    let dbg_last_i = i
+    let collision = false
+    for (let guard = 0; guard < 999999999; guard++) {
+      dbg_last_len = len
+      dbg_last_off = off
+      dbg_last_i = i
+      if (len === 0) { // || off===this._vals.length
+        ret = i
+        break
+      }
+      else {
+        let cmp = 0
+        try {
+          cmp = r.compare(this._vals[i]._key)
+        }
+        catch (ex: any) {
+          Gu.trap()
+        }
+        if (cmp === 0) {
+          ret = i
+          collision = true
+          break;
+        }
+        if (cmp === -1) {
+          len = i - off
+
+        }
+        else if (cmp === 1) {
+          len = this._vals.length - i - 1
+          off = i + 1
+        }
+        i = (off + len / 2) | 0
+        if (len < 0 || off < 0 || i < 0) {
+          Gu.trap()
+        }
+      }
+    }
+    return [ret, collision]
+  }
+  public *entries(): Generator<[Range, Tv]> {
+    for (let i = 0; i < this._vals.length; i++) {
+      yield [this._vals[i]._key, this._vals[i]._val]
+    }
+  }
+  public *[Symbol.iterator](): Generator<[Range, Tv]> {
+    for (let i = 0; i < this._vals.length; i++) {
+      yield [this._vals[i]._key, this._vals[i]._val]
+    }
+  }
+  public static test() {
+    msg("==TEST_RMAP==")
+    let m = new RangeMap<string>()
+    m.set(new Range(10, 10), "asdfasdfasdf")
+    m.set(new Range(12, 20), "asdfasdfas2")
+    m.set(new Range(-10, 9), "-9tfo-8")
+    m.set(new Range(-30, -12), "zeasdfasdro")
+    m.set(new Range(-11, -11), "-asdfasdf99")
+    m.set(new Range(11, 11), "sdasdf")
+    m.set(new Range(999), "999")
+    m.set(new Range(-999), "-999")
+    msg(m.toString())
+
+    let gg = (n: Int | Range) => {
+      msg("==FIND " + n.toString())
+      let g = m.get_all(n)
+      if (g.length) {
+        for (let i = 0; i < g.length; i++) {
+          msg("   g=" + g[i].toString())
+        }
+      }
+      else {
+        msg("" + n + " not found")
+      }
+    }
+
+    gg(-999)
+    gg(11)
+    gg(new Range(-10, 10))
+    gg(new Range(-9999, 9999))
+
+    m = new RangeMap<string>()
+    for (let i = 0; i < 100; i++) {
+      let rr = Range.order((Math.random() * 2 - 1) * 1000 | 0, (Math.random() * 2 - 1) * 1000 | 0)
+      try {
+        m.set(rr, rr.toString())
+      }
+      catch (e: any) {
+      }
+    }
+
+    msg(m.toString())
+
+    Gu.trap()
+  }
+  public override toString(): string {
+    let st = ""
+    for (let [i, v] of this._vals.entries()) {
+      st += v.toString() + "\n"
+    }
+    return st
+  }
+}
+class SymInfo {
+  public _sym: Sym
+  public _val: string | Range
+  public _text: string
+  public constructor(s: Sym, v: string | Range) {
+    this._sym = s
+    this._val = v
+    if (v instanceof Range) {
+      this._text = v.toString()
+    }
+    else {
+      this._text = v
+    }
+  }
+}
 class LexMatch {
   public _off: number
   public _len: number
@@ -250,13 +540,14 @@ class LexMatch {
     return allkeys.slice(this._off, this._off + this._len)
   }
 }
-class LexNode {
+class LexNode extends Object {
   public _sym: Sym
   public _rule: Rule | null
-  public _nodes: Map<Sym, LexNode> | null = null
-  public _parent: LexNode | null = null
+  public _parent: LexNode | null
+  public _nodes: RangeMap<LexNode> | null = null
 
   public constructor(sym: Sym, rule: Rule | null, parent: LexNode | null) {
+    super()
     this._parent = parent
     this._rule = rule
     this._sym = sym
@@ -268,16 +559,16 @@ class LexNode {
     }
     return x;
   }
-  public put(keys: Sym[], val: Rule, off: number = 0, len: number = -1) {
+  public put(keys: SymInfo[], val: Rule, off: number = 0, len: number = -1) {
     Assert(keys.length > 0) //cannot put values on root
     if (len == -1) {
       len = keys.length
     }
     this._put(keys, val, off, len, -1);
   }
-  protected _put(keys: Sym[], val: Rule, off: number, len: number, idx: number) {
+  protected _put(keys: SymInfo[], val: Rule, off: number, len: number, idx: number) {
     if (idx + 1 == len) {
-      if (this._rule != null) {
+      if (this._rule !== null) {
         msg(this.root().toString())
         Raise("Ambiguous symbol: '" + val + "' already defined as: '" + this._rule + "'")
       }
@@ -285,62 +576,85 @@ class LexNode {
     }
     else {
       if (this._nodes == null) {
-        this._nodes = new Map<Sym, LexNode>()
+        this._nodes = new RangeMap<LexNode>()
       }
-      let n = this._nodes.get(keys[idx + 1])
-      if (!n) {
-        n = new LexNode(keys[idx + 1], null, this)
+
+      let n: LexNode
+      let sym = keys[idx + 1]._sym
+      if (sym._max === 35) {
+        Gu.trap()
+      }
+      let nn = this._nodes.get(sym)
+      if (!nn) {
+        n = new LexNode(sym, null, this)
+        this._nodes.set(n._sym, n)
+      }
+      else {
+        n = nn._val
       }
       n._put(keys, val, off, len, idx + 1)
-      this._nodes.set(n._sym, n)
     }
   }
 
-  public exact(keys: Array<Rule | Sym | Tok>, off: number = 0,): LexMatch | null {
+  public exact(keys: Array<Rule | Sym | Tok>, off: number = 0,): Array<LexMatch> {
     return this.get(keys, off, keys.length - off, keys.length, false)
   }
-  public full(keys: Array<Rule | Sym | Tok>, off: number = 0): LexMatch | null {
+  public full(keys: Array<Rule | Sym | Tok>, off: number = 0): Array<LexMatch> {
     return this.get(keys, off, keys.length - off, -1, false)
   }
-  public part(keys: Array<Rule | Sym | Tok>, off: number = 0): LexMatch | null {
+  public part(keys: Array<Rule | Sym | Tok>, off: number = 0): Array<LexMatch> {
     return this.get(keys, off, keys.length - off, -1, true,)
   }
-  public get(keys: Array<Rule | Sym | Tok>, off: number = 0, len: number = -1, count: number = -1, part: boolean): LexMatch | null {
+  public get(keys: Array<Rule | Sym | Tok>, off: number = 0, len: number = -1, count: number = -1, part: boolean): Array<LexMatch> {
     if (len === -1) {
       len = keys.length - off
     }
-    return this._get(keys, off, len, count, part, -1)
+    let arr = new Array<LexMatch>()
+    this._get(keys, off, len, count, part, arr, -1)
+    return arr
   }
-  protected _get(keys: Array<Rule | Sym | Tok>, off: number, maxlen: number, exact: number, part: boolean, idx: number): LexMatch | null {
+  protected _get(keys: Array<Rule | Sym | Tok>, off: number, maxlen: number, exact: number, part: boolean, arr: Array<LexMatch>, idx: number): LexMatch | null {
     if (idx + 1 < maxlen) {
       if (idx + 1 !== exact) {
-        if (this._nodes !== null) {
-          let sym :Sym =0 as Sym
-          let k = keys[off + idx + 1]
-          if(k instanceof Rule){
-            sym = k._sym
-          }
-          else if(k instanceof Tok){
-            sym = k._rule._sym
-          }
-          else{
-            sym = k as Sym
-          }
+        let k = keys[off + idx + 1]
+        let sym: Sym //= new Sym(0,0)
+        if (k instanceof Rule) {
+          sym = k._sym
+        }
+        else if (k instanceof Tok) {
+          sym = k._rule._sym
+        }
+        else {
+          sym = k as Sym
+        }
 
+        if (this._nodes) {
           let n = this._nodes.get(sym)
-          if(n){
-            let res = n._get(keys, off, maxlen, exact, part, idx + 1)
+          if (n) {
+            let res = n._val._get(keys, off, maxlen, exact, part, arr, idx + 1)
             if (res) {
               return res;
             }
           }
-
         }
+        // if (this._regex_nodes) {
+        //   for (let [i, n] of this._regex_nodes.entries()) {
+        //     if (n._regex!.test(String.fromCharCode(sym))) {
+        //       let res = n._get(keys, off, maxlen, exact, part, arr, idx + 1)
+        //       if (res) {
+        //         return res;
+        //       }
+        //     }
+        //   }
+        // }
+
       }
     }
 
     if (((this._rule !== null) && (idx + 1 === exact || exact === -1)) || (part)) {
-      return new LexMatch(off, idx + 1, this)
+      let lm = new LexMatch(off, idx + 1, this)
+      arr.push(lm)
+      return lm
     }
 
     return null
@@ -356,7 +670,7 @@ class LexNode {
       }
     }
     if (this._nodes != null) {
-      for (let [ni, n] of this._nodes!.entries()) {
+      for (let [ni, n] of this._nodes.entries()) {
         n._toString(st, 2, str, colsize, lang)
       }
     }
@@ -367,7 +681,7 @@ class LexNode {
     let st = ""
     let xx = lang.syms().get(this._sym)
     if (xx) {
-      st = Gu.escape(xx)
+      st = Gu.escape(xx._val._text)
     }
     else {
       st += "(" + this._sym + ")"
@@ -380,11 +694,11 @@ class LexNode {
 class LexTree extends LexNode {
   private _lang: Lang
   public constructor(lang: Lang) {
-    super((0 as Sym), null, null)
+    super(new Sym(0, 0), null, null)
     this._lang = lang
   }
   public override lang(): Lang { return this._lang }
-  public toString(sp: number = 0, str = ""): string {
+  public override toString(sp: number = 0, str = ""): string {
     if (this._parent !== null) {
       return this.root().toString()
     }
@@ -402,12 +716,9 @@ class LexTree extends LexNode {
     }
   }
 }
-
-type Sym = number & { readonly '': unique symbol };
-type Key = number & { readonly '': unique symbol };
 class Rule {
   public readonly _sym: Sym
-  public readonly _key: Key
+  public readonly _key: RuleKey
   public readonly _name: string
   public readonly _rule: Array<Sym>
 
@@ -418,10 +729,10 @@ class Rule {
     this._sym = Lang.sym(name)
     this._key = Lang.key(name, rule)
   }
-  public match(x: Key): boolean {
+  public match(x: RuleKey): boolean {
     return this._key === x
   }
-  public equals(x: Rule | Key | Tok): boolean {
+  public equals(x: Rule | RuleKey | Tok): boolean {
     if (x instanceof Rule) {
       return this._equals(x._key)
     }
@@ -432,7 +743,7 @@ class Rule {
       return this._equals(x)
     }
   }
-  public _equals(x: Key): boolean {
+  public _equals(x: RuleKey): boolean {
     return (this._key === x)
   }
   public toString(lang: Lang, key: boolean = false): string {
@@ -447,7 +758,7 @@ class Rule {
       let app2 = ""
       let rrr = lang.syms().get(rv)
       if (rrr) {
-        st += app2 + "" + Gu.escape(rrr) + ""
+        st += app2 + "" + Gu.escape(rrr._val._text) + ""
       }
       else {
         st += "(" + rv + ")"
@@ -456,7 +767,6 @@ class Rule {
     }
     return st
   }
-
 
 }
 class Tok {
@@ -487,8 +797,8 @@ class Tok {
 class Lang {
   // key = hash of sym and prod
   // sym = hash of rule name
-  private _rules: Map<Key, Rule> = new Map<Key, Rule>()
-  private _syms: Map<Sym, string> = new Map<Sym, string>()
+  private _rules: Map<RuleKey, Rule> = new Map<RuleKey, Rule>()
+  private _syms: RangeMap<SymInfo> = new RangeMap<SymInfo>()
   private _tree: LexTree = new LexTree(this);
   private _generated: boolean = false
 
@@ -507,9 +817,18 @@ class Lang {
         Assert(xx._rule[i] === rule._rule[i], "Hash collision: " + rule.toString(this, true) + " already exists as " + xx!.toString(this, true) + "")
       }
     }
+    if (rule._key === -664825391) {
+      Gu.trap();
+    }
     this._rules.set(rule._key, rule)
   }
-  public rule(s: string | RegExp, vals: Array<Array<string | RegExp>> | null = null): Array<Rule> {
+  public tok(s: Array<string>) {
+    //literals / tokens
+    for (let [i, ss] of s.entries()) {
+      this._symbol(ss)
+    }
+  }
+  public rule(s: string | Range, vals: Array<Array<string | Range>>): Array<Rule> {
     let rules = []
     if (vals === null) {
       rules.push(this._parse_rule(s, []))
@@ -521,40 +840,27 @@ class Lang {
     }
     return rules
   }
-  public _parse_rule(s: string | RegExp, vals: Array<string | RegExp> | null = null): Rule {
+  public _parse_rule(s: string | Range, vals: Array<string | Range>): Rule {
     Assert(this._generated === false)
 
-    if (vals !== null && vals.length > 0) {
-      for (let [si, ss] of vals.entries()) {
-        if (ss instanceof RegExp) {
-          //ok how to add regex to the tree uh .. 
-          //cant put it in symbol table its not a symbol it's an operation
-          //      this._symbol(ss.)
-          //        rule = new Rule(s, syms)
-        }
-        else {
-          this._symbol(ss)
-        }
-      }
-    }
+    //we dont want the symbol names in the tree..
 
+    for (let [si, ss] of vals.entries()) {
+      this.addSym(ss)
+    }
     let rule: Rule
+    let n: string = ""
     if (typeof s === 'string') {
       Assert(s.length)
-      rule = this._symbol(s)
-      if (vals !== null && vals.length > 0) {
-        rule = new Rule(s, Lang.syms(vals))
-        this.check_set(rule)
-      }
-    }
-    else if (s instanceof RegExp) {
-      NoImp()
-      rule = new Rule(s.source, [])
+      n = s
     }
     else {
-      NoImp()
-      rule = new Rule("", [])
+      n = s.toString()
     }
+    this.addSym(s)
+    rule = new Rule(n, Lang.syms(vals))
+    this.check_set(rule)
+
     return rule
   }
   public _symbol(s: string): Rule {
@@ -563,31 +869,39 @@ class Lang {
     let rule = this._rules.get(Lang.key(s, syms))
     if (!rule) {
       let rules = Lang.tokens(s)
+      //tokens are defined by themselves recursively no need to put chars in the tree
       for (let [i, r] of rules.entries()) {
         if (!this._rules.get(r._key)) {
           this.check_set(r)
-          this._syms.set(syms[i], s[i])
+          this.addSym(s[i])
+          //this._syms.set(syms[i], s[i])
         }
       }
-      this._syms.set(Lang.sym(s), s)
+      this.addSym(s)
       rule = new Rule(s, syms)
     }
 
     return rule
   }
+  private addSym(ss: string | Range) {
+    let sym = Lang.sym(ss)
+    this._syms.set(sym, new SymInfo(sym, ss))
+  }
   private generate() {
     if (!this._generated) {
-      this._tree = new LexTree(this)
-      for (let [rt, rr] of this._rules.entries()) {
-        this._tree.put(rr._rule, rr)
-      }
       if (Gu.Debug) {
         let st = "===SYMS===\n"
         for (let [k, v] of this._syms.entries()) {
-          st += "" + k + " -> " + Gu.escape(v) + "\n"
+          st += "" + k + " -> " + Gu.escape(v._text) + "\n"
         }
         msg(st)
       }
+
+      this._tree = new LexTree(this)
+      for (let [rt, rr] of this._rules.entries()) {
+        this._tree.put(this.infos(rr._rule), rr)
+      }
+
       if (Gu.Debug) {
         msg(this._tree.toString())
       }
@@ -601,7 +915,7 @@ class Lang {
     }
     return r
   }
-  public static keys(rs: Array<Rule> | null): Array<Key> {
+  public static keys(rs: Array<Rule> | null): Array<RuleKey> {
     let r = []
     if (rs) {
       for (let [i, c] of rs.entries()) {
@@ -610,12 +924,12 @@ class Lang {
     }
     return r
   }
-  public static syms(rs: Array<string | RegExp> | null): Array<Sym> {
+  public static syms(rs: Array<string | Range> | null): Array<Sym> {
     let r: Array<Sym> = []
     if (rs) {
       for (let [i, c] of rs.entries()) {
-        if (c instanceof RegExp) {
-          NoImp()
+        if (c instanceof Range) {
+          r.push(Lang.sym(c))
         }
         else {
           r = r.concat(Lang.sym(c))
@@ -632,23 +946,39 @@ class Lang {
     }
     return r
   }
-  public static sym(rs: string): Sym {
-    Assert(rs.length > 0)
-    if (rs.length === 1) {
-      return rs.charCodeAt(0) as Sym
+  public infos(rs: Array<Sym>): Array<SymInfo> {
+    let r: Array<SymInfo> = []
+    Assert(rs.length)
+    for (let [i, c] of rs.entries()) {
+      let s = this._syms.get(c)
+      Assert(s !== undefined)
+      r.push(s?._val!)
+    }
+    return r
+  }
+  public static sym(rs: string | Range): Sym {
+    if (typeof rs === 'string') {
+      Assert(rs.length > 0)
+      if (rs.length === 1) {
+        return new Sym(rs.charCodeAt(0))
+      }
+      else {
+        return new Sym(Gu.hash_string(rs))
+      }
     }
     else {
-      return Gu.hash_string(rs) as Sym
+      return new Sym(Gu.hash_string(rs.toString()))
     }
   }
-  public static key(s: string, ss: Array<Sym>): Key {
+  public static key(s: string, ss: Array<Sym>): RuleKey {
     let y: number[] = []
     for (let i = 0; i < ss.length; i++) {
-      y.push(ss[i] as number)
+      y.push(ss[i]._min)
+      y.push(ss[i]._max)
     }
     y.push(Gu.hash_string(s))
     let h = Gu.hash_ints(y, 101)
-    return h as Key
+    return h as RuleKey
   }
   private print_rules() {
     let st = ""
@@ -660,19 +990,12 @@ class Lang {
   public static load(yfile: string): Lang {
     let L = new Lang()
 
-    // L.rule("[_a-zA-Z0-9]+")
-    // two rules: 
-    // S -> S
-    // S -> S | S
-    //we are going to ignore WS here.
-    //probably should tokenize the whole thing then 
-    //  L.rule("WS", [["WS"], ["SP", "TAB"]])
-    // L.rule("S", [["S"], ["S", "S"]])
-    // L.rule("WS", [["\t", " " ]])
+    L.tok(["\"", "\'", ":", ";", "|", "#", "%token", "%%", "\n"])
 
-
-    //   L.rule("ID", [[/^[A-Z]+$/]])
-    L.rule("STR", [["ID", "ID"], ["ID"]])
+    L.rule("WS", [["\t", " "]])
+    L.rule("CHAR", [[Range.chr("a", "z")], [Range.chr("A", "Z")]])
+    L.rule("DIGIT", [[Range.chr("0", "9")]])
+    L.rule("STR", [["CHAR", "CHAR"], ["CHAR"]])
     L.rule("LITERAL", [["\"", "STR", "\""], ["\'", "STR", "\'"]])
     L.rule("LCOM", [["#", "STR", "NL"]])
     L.rule("RULE", [["IDENT", ":", "RULES", ";"]])
@@ -837,7 +1160,7 @@ class FormatRegion {
   public _cols: Array<Col> = [];
   public _lines: Array<Array<Tok>> = []
 }
-class TextGrid {
+class TextGrid extends Object {
   public _lang: Lang
   public _text: string = ""
   public _max_indent = 0;
@@ -848,6 +1171,7 @@ class TextGrid {
   public _regions: Array<FormatRegion> = []
 
   public constructor(text: string, l: Lang) {
+    super()
     this._text = text;
     this._lang = l
   }
@@ -919,7 +1243,7 @@ class TextGrid {
     }
 
   }
-  public toString() {
+  public override toString(): string {
     this.align();
 
     let text = ""
@@ -1005,11 +1329,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     //vscode.window.onDidChangeTextEditorSelection((e: vscode.TextEditorSelectionChangeEvent) => {
     if (once == false) {
-      grid_align()
       //show_debug_terminal()
       if (Gu.Testing) {
         Gu.run_tests()
       }
+      grid_align()
 
       once = true;
     }
